@@ -1,43 +1,60 @@
 /*
-A azul
-T Rojo
-G Verde
-C Amarillo
+  Simulador de lector/secuenciador de ADN con LEGO.
+
+  Mapeo de colores:
+  - Azul     -> A
+  - Rojo     -> T
+  - Verde    -> G
+  - Amarillo -> C
+
+  Flujo:
+  - Avanzar: mueve una posicion, lee el color y agrega una base.
+  - Retroceder: vuelve una posicion y elimina la ultima base leida.
+  - Reset: inicia una nueva secuencia.
 */
 
-
-
-
 #include <Wire.h>
-#include "Adafruit_TCS34725.h"
-#include "AsyncStepperLib.h"
-#include <Stepper.h>
+#include <Adafruit_TCS34725.h>
 #include <U8g2lib.h>
-#include <cstring>  // Required for strcmp()
 
-U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R2, U8X8_PIN_NONE); //U8G2_R0 rotacion
+U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R2, U8X8_PIN_NONE);
 
-// Configuración del motor
-const int motorPin1 = 4;
-const int motorPin2 = 3;
-const int motorPin3 = 2;
-const int motorPin4 = 1;
+const uint8_t I2C_SDA = 8;
+const uint8_t I2C_SCL = 9;
+
+const uint8_t motorPin1 = 4;
+const uint8_t motorPin2 = 3;
+const uint8_t motorPin3 = 2;
+const uint8_t motorPin4 = 1;
+
+const uint8_t btnReset = 5;
+const uint8_t btnBackward = 6;
+const uint8_t btnForward = 7;
+
 const int numSteps = 8;
-const int stepsLookup[8] = { B1000, B1100, B0100, B0110, B0010, B0011, B0001, B1001 };
+const int stepsLookup[numSteps] = {
+  B1000, B1100, B0100, B0110, B0010, B0011, B0001, B1001
+};
+
+const int stepsPerBase = 845;
+const int stepDelayMs = 1;
+const int readSettleMs = 250;
+const uint16_t minClearToRead = 250;
+const uint8_t maxSequenceLength = 64;
+
 int stepCounter = 0;
-const int stepsPerRevolution = 4076;
+uint16_t r, g, b, c;
+char sequence[maxSequenceLength + 1] = "";
+uint8_t sequenceLength = 0;
 
-void clockwise() {
-  stepCounter++;
-  if (stepCounter >= numSteps) stepCounter = 0;
-  setOutput(stepCounter);
-}
+bool forwardWasPressed = false;
+bool backwardWasPressed = false;
+bool resetWasPressed = false;
 
-void anticlockwise() {
-  stepCounter--;
-  if (stepCounter < 0) stepCounter = numSteps - 1;
-  setOutput(stepCounter);
-}
+Adafruit_TCS34725 tcs = Adafruit_TCS34725(
+  TCS34725_INTEGRATIONTIME_154MS,
+  TCS34725_GAIN_4X
+);
 
 void setOutput(int step) {
   digitalWrite(motorPin1, bitRead(stepsLookup[step], 0));
@@ -46,144 +63,209 @@ void setOutput(int step) {
   digitalWrite(motorPin4, bitRead(stepsLookup[step], 3));
 }
 
-// Ahora que las funciones están definidas, podemos crear el objeto stepper1
-AsyncStepper stepper1(stepsPerRevolution, clockwise, anticlockwise);
-
-// Configuraciones del sensor de color
-Adafruit_TCS34725 tcs = Adafruit_TCS34725(TCS34725_INTEGRATIONTIME_614MS, TCS34725_GAIN_1X);
-
-const int DELTA = 1500;
-const int btnCal = 5;
-const int btnBackward = 6;
-const int btnforW = 7;
-bool isBackwardButtonPressedBefore = false;
-int stepsTaken = 0;
-bool isButtonPressedBefore = false;
-
-struct Color {
-  int r, g, b;
-  char name;
-};
-
-// Define colors using single-character identifiers
-Color colors[] = {
-  {10000, 13000, 11000, 'B'},  // Blanco
-  {650, 1500, 2800, 'A'},     // Azul
-  {10500, 8530, 3400, 'C'},    // Amarillo
-  {1600, 4100, 2270, 'V'},     // Verde
-  {3000, 1000, 700, 'R'},      // Rojo
-  {130, 150, 130, 'n'}        // n (for not identified)
-};
-bool isWithinRange(int value, int target) {
-  return value >= target - DELTA && value <= target + DELTA;
+void releaseMotor() {
+  digitalWrite(motorPin1, LOW);
+  digitalWrite(motorPin2, LOW);
+  digitalWrite(motorPin3, LOW);
+  digitalWrite(motorPin4, LOW);
 }
 
-char identifyColor(int r, int g, int b) {
-  for (int i = 0; i < sizeof(colors) / sizeof(colors[0]); i++) {
-    if (isWithinRange(r, colors[i].r) && 
-        isWithinRange(g, colors[i].g) &&
-        isWithinRange(b, colors[i].b)) {
-      return colors[i].name;
-    }
+void clockwiseStep() {
+  stepCounter++;
+  if (stepCounter >= numSteps) {
+    stepCounter = 0;
   }
-  return 'n';  // Return 'n' if no color matches
+  setOutput(stepCounter);
 }
 
+void anticlockwiseStep() {
+  stepCounter--;
+  if (stepCounter < 0) {
+    stepCounter = numSteps - 1;
+  }
+  setOutput(stepCounter);
+}
+
+void moveSteps(int steps, bool forward) {
+  for (int i = 0; i < steps; i++) {
+    if (forward) {
+      anticlockwiseStep();
+    } else {
+      clockwiseStep();
+    }
+    delay(stepDelayMs);
+  }
+  releaseMotor();
+}
+
+void readColor() {
+  tcs.getRawData(&r, &g, &b, &c);
+}
+
+char identifyBase(uint16_t red, uint16_t green, uint16_t blue, uint16_t clear) {
+  if (clear < minClearToRead) {
+    return 'N';
+  }
+
+  uint32_t total = (uint32_t)red + green + blue;
+  if (total == 0) {
+    return 'N';
+  }
+
+  uint16_t rn = (uint32_t)red * 1000 / total;
+  uint16_t gn = (uint32_t)green * 1000 / total;
+  uint16_t bn = (uint32_t)blue * 1000 / total;
+
+  if (bn > 430 && bn > rn + 90 && bn > gn + 60) {
+    return 'A';
+  }
+  if (rn > 430 && rn > gn + 80 && rn > bn + 100) {
+    return 'T';
+  }
+  if (gn > 420 && gn > rn + 70 && gn > bn + 70) {
+    return 'G';
+  }
+  if (rn > 360 && gn > 330 && bn < 300) {
+    return 'C';
+  }
+
+  return 'N';
+}
+
+const char *baseName(char base) {
+  switch (base) {
+    case 'A': return "A Azul";
+    case 'T': return "T Rojo";
+    case 'G': return "G Verde";
+    case 'C': return "C Amarillo";
+    default: return "N No leido";
+  }
+}
+
+void appendBase(char base) {
+  if (sequenceLength >= maxSequenceLength) {
+    return;
+  }
+  sequence[sequenceLength++] = base;
+  sequence[sequenceLength] = '\0';
+}
+
+void removeLastBase() {
+  if (sequenceLength == 0) {
+    return;
+  }
+  sequence[--sequenceLength] = '\0';
+}
+
+void resetSequence() {
+  sequenceLength = 0;
+  sequence[0] = '\0';
+  Serial.println();
+  Serial.println(">nueva_secuencia");
+}
+
+void printSequence(char lastBase) {
+  Serial.print("Base ");
+  Serial.print(sequenceLength);
+  Serial.print(": ");
+  Serial.print(lastBase);
+  Serial.print(" | Secuencia: ");
+  Serial.println(sequence);
+}
+
+void drawDisplay(char lastBase) {
+  u8g2.clearBuffer();
+  u8g2.setFont(u8g2_font_6x10_tf);
+  u8g2.drawStr(0, 9, "ADN LEGO Sequencer");
+
+  u8g2.drawStr(0, 21, baseName(lastBase));
+
+  char line[24];
+  snprintf(line, sizeof(line), "R:%u G:%u", r, g);
+  u8g2.drawStr(0, 33, line);
+  snprintf(line, sizeof(line), "B:%u C:%u", b, c);
+  u8g2.drawStr(0, 44, line);
+
+  snprintf(line, sizeof(line), "Bases:%u", sequenceLength);
+  u8g2.drawStr(0, 55, line);
+
+  const uint8_t visibleChars = 18;
+  const char *visibleSequence = sequence;
+  if (sequenceLength > visibleChars) {
+    visibleSequence = sequence + sequenceLength - visibleChars;
+  }
+  u8g2.drawStr(55, 55, visibleSequence);
+  u8g2.sendBuffer();
+}
 
 void setup() {
   Serial.begin(115200);
+
   pinMode(motorPin1, OUTPUT);
   pinMode(motorPin2, OUTPUT);
   pinMode(motorPin3, OUTPUT);
   pinMode(motorPin4, OUTPUT);
-  pinMode(btnCal, INPUT_PULLUP);
-  pinMode(btnforW, INPUT_PULLUP);
+  releaseMotor();
+
+  pinMode(btnReset, INPUT_PULLUP);
+  pinMode(btnForward, INPUT_PULLUP);
   pinMode(btnBackward, INPUT_PULLUP);
-  stepper1.SetSpeedRpm(15);
+
+  Wire.begin(I2C_SDA, I2C_SCL);
   u8g2.begin();
 
+  u8g2.clearBuffer();
+  u8g2.setFont(u8g2_font_6x10_tf);
+  u8g2.drawStr(0, 12, "Iniciando sensor...");
+  u8g2.sendBuffer();
+
   if (!tcs.begin()) {
-    Serial.println("No TCS34725 found ... check your connections");
+    Serial.println("Error: sensor TCS34725 no encontrado");
+    u8g2.clearBuffer();
+    u8g2.drawStr(0, 12, "TCS34725 no encontrado");
+    u8g2.drawStr(0, 26, "Revise SDA/SCL/3V3/GND");
+    u8g2.sendBuffer();
   } else {
-    Serial.println("Found sensor");
+    Serial.println("TCS34725 OK");
+    resetSequence();
   }
 }
 
-bool isMotorRunning = false;  // Declaración de la variable
-const int FIXED_STEPS = 845; // Establece la cantidad de pasos que el motor debe avanzar al presionar el botón
-  uint16_t r, g, b, c;
 void loop() {
-  // Constantly check and display the color
-  uint16_t r, g, b, c;
-  tcs.getRawData(&r, &g, &b, &c);
-  u8g2.clearBuffer();
-  u8g2.setFont(u8g2_font_ncenB08_tr);
-  u8g2.drawStr(0, 10, ("R: " + String(r)).c_str());
-  u8g2.drawStr(0, 20, ("G: " + String(g)).c_str());
-  u8g2.drawStr(0, 30, ("B: " + String(b)).c_str());
-  u8g2.drawStr(0, 40, ("C: " + String(c)).c_str());
-  
-   char colorName = identifyColor(r, g, b);
-      if (colorName) {
-        if (colorName == 'C') {
-            u8g2.drawStr(0, 50, "Amarillo");
-        } else if (colorName == 'A') {
-            u8g2.drawStr(0, 50, "Azul");
-        } else if (colorName == 'R') {
-            u8g2.drawStr(0, 50, "Rojo");
-        } else if (colorName == 'V') {
-            u8g2.drawStr(0, 50, "verde");
-        }
-    }
-//  u8g2.drawStr(0, 50, String(colorName));
-  u8g2.sendBuffer();
+  readColor();
+  char currentBase = identifyBase(r, g, b, c);
+  drawDisplay(currentBase);
 
-  // Check for button presses
-  int btnForward = digitalRead(btnforW);
-  int btnBack = digitalRead(btnBackward);
-  int rstcoun = digitalRead(btnCal);
+  bool forwardPressed = digitalRead(btnForward) == LOW;
+  bool backwardPressed = digitalRead(btnBackward) == LOW;
+  bool resetPressed = digitalRead(btnReset) == LOW;
 
-  // Avanzar una cantidad fija de pasos al presionar el botón
-  if (btnForward == LOW && !isButtonPressedBefore) {
-    for(int i = 0; i < FIXED_STEPS; i++) {
-        anticlockwise();
-        delay(1); // Pausa entre pasos.
-    }
-    isButtonPressedBefore = true;
-
-    // After moving, print the corresponding letter for the color
-   char colorName = identifyColor(r, g, b);
-    if (colorName) {
-        if (colorName == 'C') {
-            Serial.print("C");
-        } else if (colorName == 'A') {
-            Serial.print("A");
-        } else if (colorName == 'R') {
-            Serial.print("T");
-        } else if (colorName == 'V') {
-            Serial.print("G");
-        }
-    }
-    Serial.println("boton avanzar");
-  } else if (btnForward == HIGH) {
-    isButtonPressedBefore = false;
+  if (forwardPressed && !forwardWasPressed) {
+    moveSteps(stepsPerBase, true);
+    delay(readSettleMs);
+    readColor();
+    currentBase = identifyBase(r, g, b, c);
+    appendBase(currentBase);
+    printSequence(currentBase);
+    drawDisplay(currentBase);
   }
 
-  // Retroceder una cantidad fija de pasos al presionar el botón
-  if (btnBack == LOW && !isBackwardButtonPressedBefore) {
-    for(int i = 0; i < FIXED_STEPS; i++) {
-        clockwise();
-        delay(1);
-    }
-    Serial.println("boton retroceder");
-    isBackwardButtonPressedBefore = true;
-  } else if (btnBack == HIGH) {
-    isBackwardButtonPressedBefore = false;
+  if (backwardPressed && !backwardWasPressed) {
+    moveSteps(stepsPerBase, false);
+    removeLastBase();
+    Serial.print("Retroceso | Secuencia: ");
+    Serial.println(sequence);
+    drawDisplay(currentBase);
   }
 
-  // Restablecer contador de pasos
-  if (rstcoun == LOW) {
-    stepsTaken = 0;
-    Serial.println("Nueva secuecia");
+  if (resetPressed && !resetWasPressed) {
+    resetSequence();
+    drawDisplay(currentBase);
   }
+
+  forwardWasPressed = forwardPressed;
+  backwardWasPressed = backwardPressed;
+  resetWasPressed = resetPressed;
+
+  delay(25);
 }

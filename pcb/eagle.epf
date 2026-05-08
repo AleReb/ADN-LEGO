@@ -288,7 +288,6 @@ UsedLibrary="C:/Users/Ale/Documents/EAGLE/libraries/BUCK_MODULE.lbr"
 UsedLibrary="C:/Users/Ale/Documents/EAGLE/libraries/ConectorPlantower.lbr"
 UsedLibrary="C:/Users/Ale/Documents/EAGLE/libraries/DS01-254-S-02BE Sliding Switch 2 slides.lbr"
 UsedLibrary="C:/Users/Ale/Documents/EAGLE/libraries/ESP32 S3 Module.lbr"
-UsedLibrary="C:/Users/Ale/Documents/EAGLE/libraries/ESP32-C3_SUPERMINI_TH.lbr"
 UsedLibrary="C:/Users/Ale/Documents/EAGLE/libraries/ESP32-DEVKITC-32D.lbr"
 UsedLibrary="C:/Users/Ale/Documents/EAGLE/libraries/ESP32-DEVKITC-32U.lbr"
 UsedLibrary="C:/Users/Ale/Documents/EAGLE/libraries/ESP32-DEVKITC.lbr"
@@ -746,6 +745,7 @@ ArcDirection=0
 AddLevel=2
 PadsSameType=0
 Layer=91
+Views=" 1: -0.611725 2.4415 158.127 108.825"
 Sheet="1"
 
 [Win_2]
@@ -753,6 +753,6 @@ Type="Control Panel"
 Number=0
 
 [Desktop]
-Screen="1920 1080"
+Screen="3360 1080"
 Window="Win_1"
 Window="Win_2"
