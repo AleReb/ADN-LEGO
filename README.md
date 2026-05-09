@@ -61,6 +61,34 @@ El esquematico `pcb/adn_Lego.sch` contiene estos bloques:
 
 El firmware fuerza `Wire.begin(8, 9)` para coincidir con el PCB.
 
+## Pinout de conectores del PCB
+
+| Conector | Pin | Senal |
+| --- | --- | --- |
+| `SV1` motor | 1 | Motor IN1 / GPIO4 |
+| `SV1` motor | 2 | Motor IN2 / GPIO3 |
+| `SV1` motor | 3 | Motor IN3 / GPIO2 |
+| `SV1` motor | 4 | Motor IN4 / GPIO1 |
+| `SV1` motor | 5 | GND |
+| `SV1` motor | 6 | 5V |
+| `RGB` sensor TCS34725 | 1 | SCL / GPIO9 |
+| `RGB` sensor TCS34725 | 2 | SDA / GPIO8 |
+| `RGB` sensor TCS34725 | 3 | GND |
+| `RGB` sensor TCS34725 | 4 | 5V |
+| `I2C2` auxiliar | 1 | SCL / GPIO9 |
+| `I2C2` auxiliar | 2 | SDA / GPIO8 |
+| `I2C2` auxiliar | 3 | GND |
+| `I2C2` auxiliar | 4 | 5V |
+| `EXP/S3` | 1 | SDA / GPIO8 |
+| `EXP/S3` | 2 | SCL / GPIO9 |
+| `EXP/S3` | 3 | GPIO10 |
+| `EXP/S3` | 4 | GPIO11 |
+| `EXP/S3` | 5 | GPIO12 |
+| `EXP/S3` | 6 | GPIO13 |
+| `EXP/S3` | 7 | 3V3 |
+| `EXP/S3` | 8 | GND |
+| `EXP/S3` | 9 | 5V |
+
 ## Dependencias de Arduino
 
 Instalar desde el Library Manager:
@@ -114,7 +142,23 @@ Estos parametros estan al inicio de `lego_adnV2.ino` y probablemente deben calib
 | `minClearToRead` | `250` | Umbral minimo de luz para aceptar lectura |
 | Reglas de `identifyBase()` | Umbrales RGB normalizados | Afinar si un color se confunde con otro |
 
-Para una version mas robusta, el siguiente cambio recomendado es agregar un modo de calibracion: mantener pulsado reset, presentar Azul/Rojo/Verde/Amarillo, guardar sus valores en memoria y clasificar por distancia al color calibrado.
+## Mejoras recuperadas para una futura version `lego_adn_v3`
+
+Al comparar el firmware actual con la documentacion del codigo antiguo, las mejoras que conviene recuperar o implementar como un todo son:
+
+| Mejora | Origen / motivo | Implementacion esperada en `lego_adn_v3` |
+| --- | --- | --- |
+| Modo automatico por marcas negras | La documentacion antigua describia busqueda de inicio, lectura continua y fin por bloques negros, pero el sketch actual no lo implementa | Agregar una maquina de estados: buscar inicio, avanzar por bases, validar color, detectar fin y publicar secuencia completa |
+| Deteccion robusta de inicio/fin | Los bloques negros funcionaban como control de secuencia | Contar varias lecturas negras consecutivas antes de declarar inicio o fin, para evitar falsos positivos |
+| Reintentos de lectura de color | El codigo actual toma una lectura despues del movimiento | Tomar varias muestras RGB/C por posicion, descartar lecturas debiles y clasificar con promedio o mediana |
+| Calibracion guiada | Los rangos antiguos eran fijos y dependian del prototipo fisico | Crear modo de calibracion para Azul/Rojo/Verde/Amarillo/Negro y clasificar por distancia al color calibrado |
+| Estados de operacion | La documentacion antigua proponia flags como sensorReady, displayReady, manualMode y autoMode | Mantener estado explicito del sistema y mostrarlo en OLED/Serial |
+| Debounce por tiempo | El firmware actual usa flags de flanco, suficiente pero sensible a rebote mecanico | Usar `millis()` para debounce de botones y para evitar dobles lecturas |
+| Mejor manejo de fallos | El sketch actual muestra error si no encuentra el TCS34725, pero sigue dependiendo de lecturas validas | Reportar estado de sensor/pantalla, permitir reintentos y evitar bloquear el flujo completo |
+| Salida Serial mas estructurada | El codigo actual imprime texto humano; para analisis posterior puede ser util un formato estable | Agregar lineas tipo CSV o eventos: `BASE,index,base,sequence`, `STATE,...`, `ERROR,...` |
+| Pantalla con modo docente | La idea educativa pide ver color, base, valores RGB y secuencia | Alternar o compactar vistas OLED: lectura actual, estado, largo y secuencia |
+
+La proxima implementacion deberia vivir en una carpeta separada `lego_adn_v3/`, manteniendo `lego_adnV2/` como version manual estable.
 
 ## Notas del PCB
 
